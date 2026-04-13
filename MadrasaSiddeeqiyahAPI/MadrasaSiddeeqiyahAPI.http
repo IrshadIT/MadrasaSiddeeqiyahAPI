@@ -1,0 +1,6 @@
+@MadrasaSiddeeqiyahAPI_HostAddress = http://localhost:5264
+
+GET {{MadrasaSiddeeqiyahAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
