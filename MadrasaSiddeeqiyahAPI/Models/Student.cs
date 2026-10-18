@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 namespace MadrasaSiddeeqiyahAPI.Models
 {
     public class Student
@@ -14,6 +14,12 @@ namespace MadrasaSiddeeqiyahAPI.Models
         public string Course { get; set; } = string.Empty;
         
         public bool HostelRequired { get; set; }
+        
+        public string AadhaarNumber { get; set; } = string.Empty;
+
+        public bool IsAadhaarVerified { get; set; } = false;
+
+        public DateTime? AadhaarVerifiedAt { get; set; }
 
         public DateTime ApplicationDate { get; set; } = DateTime.UtcNow;
 
