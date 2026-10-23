@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using MadrasaSiddeeqiyahAPI.Data;
 using MadrasaSiddeeqiyahAPI.Models;
 using MadrasaSiddeeqiyahAPI.Services;
@@ -8,32 +10,32 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using Microsoft.OpenApi.Models;
-using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add Services
+// ------------------------------------------------------------
+// 1. Controllers and Swagger
+// ------------------------------------------------------------
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "Madrasa Siddeeqiyah API",
         Version = "v1",
-        Description = "### 📚 Madrasa Siddeeqiyah Admission & Student Management API\n\n" +
-                      "**Default Admin Credentials:**\n" +
-                      "- **Username:** `admin`\n" +
-                      "- **Password:** `Madrasa@2026`\n\n" +
-                      "**How to test protected endpoints in Swagger:**\n" +
-                      "1. Open `POST /api/Auth/login` below, click **Try it out**, and enter the credentials.\n" +
-                      "2. Copy the `token` string returned in the response.\n" +
-                      "3. Click the **Authorize 🔓** button at the top right of this Swagger page.\n" +
-                      "4. Paste your token and click **Authorize**.\n" +
-                      "5. All endpoints (Students, Users, Profile) will now send the Bearer header automatically!"
+        Description =
+            "### Madrasa Siddeeqiyah API\n\n" +
+            "**Authentication:**\n" +
+            "1. Call `POST /api/Auth/login` with an authorized account.\n" +
+            "2. Copy the JWT token from the response.\n" +
+            "3. Click **Authorize** in Swagger and enter the token.\n" +
+            "4. Test endpoints permitted for your account's role."
     });
 
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
@@ -43,7 +45,7 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Paste your JWT Bearer token here to authenticate all protected requests."
+        Description = "Enter your JWT Bearer token to authenticate."
     });
 
     options.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -62,34 +64,94 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// Database
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+// ------------------------------------------------------------
+// 2. Database
+// ------------------------------------------------------------
 
-// CORS
-builder.Services.AddCors(options =>
+builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options.AddPolicy("AllowAll",
-        policy => policy.AllowAnyOrigin()
-                        .AllowAnyMethod()
-                        .AllowAnyHeader());
+    var connectionString =
+        builder.Configuration.GetConnectionString("DefaultConnection");
+
+    if (string.IsNullOrWhiteSpace(connectionString))
+    {
+        throw new InvalidOperationException(
+            "Connection string 'DefaultConnection' is not configured.");
+    }
+
+    options.UseSqlServer(connectionString);
 });
 
-// Dependency Injection
+// ------------------------------------------------------------
+// 3. CORS
+// Configure deployed frontend origins using Cors:AllowedOrigins.
+// Example appsettings entries should be the exact origins, with no path.
+// ------------------------------------------------------------
+
+var allowedOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .GetChildren()
+    .Select(section => section.Value)
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Cast<string>()
+    .ToArray();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", policy =>
+    {
+        policy.AllowAnyHeader()
+              .AllowAnyMethod();
+
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins);
+        }
+        else if (builder.Environment.IsDevelopment())
+        {
+            // Local development only. This does not allow arbitrary domains.
+            policy.SetIsOriginAllowed(origin =>
+                Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+                uri.Scheme == Uri.UriSchemeHttp &&
+                (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                 uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)));
+        }
+        else
+        {
+            // In production, cross-origin browser access stays disabled until
+            // explicit frontend origins are configured.
+            policy.SetIsOriginAllowed(_ => false);
+        }
+    });
+});
+
+// ------------------------------------------------------------
+// 4. Dependency injection
+// ------------------------------------------------------------
+
 builder.Services.AddScoped<IStudentService, StudentService>();
 builder.Services.AddScoped<IFinanceService, FinanceService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 
-// Validation
+// ------------------------------------------------------------
+// 5. FluentValidation
+// ------------------------------------------------------------
+
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<StudentCreateDtoValidator>();
 
-// Tracing
+// ------------------------------------------------------------
+// 6. OpenTelemetry tracing
+// ------------------------------------------------------------
+
 var otlpEndpoint = builder.Configuration["OpenTelemetry:Otlp:Endpoint"];
+
 builder.Services.AddOpenTelemetry().WithTracing(tracerProviderBuilder =>
 {
     tracerProviderBuilder
-        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(builder.Environment.ApplicationName ?? "MadrasaSiddeeqiyahAPI"))
+        .SetResourceBuilder(
+            ResourceBuilder.CreateDefault()
+                .AddService(builder.Environment.ApplicationName ?? "MadrasaSiddeeqiyahAPI"))
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
         .AddSqlClientInstrumentation()
@@ -97,60 +159,147 @@ builder.Services.AddOpenTelemetry().WithTracing(tracerProviderBuilder =>
 
     if (!string.IsNullOrWhiteSpace(otlpEndpoint))
     {
+        if (!Uri.TryCreate(otlpEndpoint, UriKind.Absolute, out var parsedOtlpEndpoint) ||
+            (parsedOtlpEndpoint.Scheme != Uri.UriSchemeHttp &&
+             parsedOtlpEndpoint.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException(
+                "OpenTelemetry:Otlp:Endpoint must be an absolute HTTP or HTTPS URI.");
+        }
+
         tracerProviderBuilder.AddOtlpExporter(options =>
         {
-            options.Endpoint = new Uri(otlpEndpoint);
+            options.Endpoint = parsedOtlpEndpoint;
         });
     }
 });
 
-// Authentication Configuration (Phase 1.3)
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var key = Encoding.ASCII.GetBytes(jwtSettings["Key"] ?? "SuperSecretKeyForMadrasaSiddeeqiyah2026");
+// ------------------------------------------------------------
+// 7. JWT authentication configuration
+// Requires JwtSettings:Key, JwtSettings:Issuer and
+// JwtSettings:Audience from a secure configuration provider.
+// ------------------------------------------------------------
 
-builder.Services.AddAuthentication(options =>
+var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+var encodedKey = jwtSettings["Key"];
+var jwtIssuer = jwtSettings["Issuer"];
+var jwtAudience = jwtSettings["Audience"];
+
+if (string.IsNullOrWhiteSpace(encodedKey) ||
+    string.IsNullOrWhiteSpace(jwtIssuer) ||
+    string.IsNullOrWhiteSpace(jwtAudience))
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
+    throw new InvalidOperationException(
+        "JWT configuration is incomplete. Configure " +
+        "JwtSettings:Key, JwtSettings:Issuer, and JwtSettings:Audience.");
+}
+
+byte[] key;
+
+try
 {
-    options.RequireHttpsMetadata = false;
-    options.SaveToken = true;
-    options.TokenValidationParameters = new TokenValidationParameters
+    key = Convert.FromBase64String(encodedKey);
+}
+catch (FormatException ex)
+{
+    throw new InvalidOperationException(
+        "JwtSettings:Key must be a Base64-encoded key.", ex);
+}
+
+if (key.Length < 32)
+{
+    throw new InvalidOperationException(
+        "JwtSettings:Key must contain at least 32 random bytes.");
+}
+
+builder.Services
+    .AddAuthentication(options =>
     {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(key),
-        ValidateIssuer = false,
-        ValidateAudience = false
-    };
-});
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.SaveToken = true;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = true,
+            ValidIssuer = jwtIssuer,
+            ValidateAudience = true,
+            ValidAudience = jwtAudience,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+    });
 
 builder.Services.AddAuthorization();
 
+// ------------------------------------------------------------
+// 8. Build the application
+// ------------------------------------------------------------
+
 var app = builder.Build();
+
+// ------------------------------------------------------------
+// 9. Database migration and initial data
+// The bootstrap administrator is created only if the Users table is empty.
+// Set AdminBootstrap:Username and AdminBootstrap:Password securely for a
+// brand-new database. This application intentionally has no password-reset
+// code in Program.cs.
+// ------------------------------------------------------------
 
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+    // For production deployments, consider applying migrations through a
+    // controlled deployment step instead of automatically at application startup.
     db.Database.Migrate();
 
     if (!db.Users.Any())
     {
-        var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>();
+        var adminUsername = app.Configuration["AdminBootstrap:Username"];
+        var adminPassword = app.Configuration["AdminBootstrap:Password"];
+
+        if (string.IsNullOrWhiteSpace(adminUsername) ||
+            string.IsNullOrWhiteSpace(adminPassword))
+        {
+            throw new InvalidOperationException(
+                "No users exist. Configure AdminBootstrap:Username and " +
+                "AdminBootstrap:Password using a secure configuration provider.");
+        }
+
+        if (adminPassword.Length < 12)
+        {
+            throw new InvalidOperationException(
+                "AdminBootstrap:Password must be at least 12 characters long.");
+        }
+
+        var passwordHasher = scope.ServiceProvider
+            .GetRequiredService<IPasswordHasher<User>>();
+
         var adminUser = new User
         {
-            Username = "admin",
+            Username = adminUsername.Trim(),
             Role = "Admin",
             CreatedAt = DateTime.UtcNow
         };
 
-        adminUser.PasswordHash = passwordHasher.HashPassword(adminUser, "Madrasa@2026");
+        adminUser.PasswordHash =
+            passwordHasher.HashPassword(adminUser, adminPassword);
+
         db.Users.Add(adminUser);
         db.SaveChanges();
     }
 
-    // Seed Campuses if empty
+    // --------------------------------------------------------
+    // 9A. Seed campuses if none exist
+    // These are illustrative/demo values. Verify them before real use.
+    // --------------------------------------------------------
+
     if (!db.Campuses.Any())
     {
         db.Campuses.AddRange(
@@ -209,10 +358,14 @@ using (var scope = app.Services.CreateScope())
                 ContactPhone = "+91 9849098765"
             }
         );
+
         db.SaveChanges();
     }
 
-    // Seed Expenses if empty
+    // --------------------------------------------------------
+    // 9B. Seed sample expenses if none exist
+    // --------------------------------------------------------
+
     if (!db.Expenses.Any())
     {
         db.Expenses.AddRange(
@@ -305,10 +458,14 @@ using (var scope = app.Services.CreateScope())
                 CampusName = "Rural Deeniyat & Quran Centre"
             }
         );
+
         db.SaveChanges();
     }
 
-    // Seed Donations if empty
+    // --------------------------------------------------------
+    // 9C. Seed sample donations if none exist
+    // --------------------------------------------------------
+
     if (!db.Donations.Any())
     {
         db.Donations.AddRange(
@@ -358,19 +515,29 @@ using (var scope = app.Services.CreateScope())
                 CampusName = "Rural Deeniyat & Quran Centre"
             }
         );
+
         db.SaveChanges();
     }
 }
 
-// Configure the HTTP request pipeline.
+// ------------------------------------------------------------
+// 10. HTTP request pipeline
+// ------------------------------------------------------------
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
-app.UseCors("AllowAll");
+// HTTPS redirection is enabled outside local Development to avoid the
+// missing-HTTPS-port warning when launchSettings.json only uses HTTP.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
+app.UseCors("AllowFrontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
