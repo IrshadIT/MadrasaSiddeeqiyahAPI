@@ -21,6 +21,78 @@ namespace MadrasaSiddeeqiyahAPI.Controllers
         private readonly AppDbContext _context;
         private readonly IPasswordHasher<User> _passwordHasher;
 
+        [Authorize]
+[HttpPost("change-password")]
+public IActionResult ChangePassword(
+    [FromBody] ChangePasswordDto request)
+{
+    if (request == null ||
+        string.IsNullOrWhiteSpace(request.CurrentPassword) ||
+        string.IsNullOrWhiteSpace(request.NewPassword))
+    {
+        return BadRequest(new
+        {
+            message = "Current and new passwords are required."
+        });
+    }
+
+    if (request.NewPassword.Length < 12)
+    {
+        return BadRequest(new
+        {
+            message = "New password must be at least 12 characters long."
+        });
+    }
+
+    if (request.CurrentPassword == request.NewPassword)
+    {
+        return BadRequest(new
+        {
+            message = "New password must be different."
+        });
+    }
+
+    var username = User.Identity?.Name;
+
+    if (string.IsNullOrWhiteSpace(username))
+    {
+        return Unauthorized();
+    }
+
+    var user = _context.Users.SingleOrDefault(
+        u => u.Username == username);
+
+    if (user == null ||
+        string.IsNullOrWhiteSpace(user.PasswordHash))
+    {
+        return Unauthorized();
+    }
+
+    var verification = _passwordHasher.VerifyHashedPassword(
+        user,
+        user.PasswordHash,
+        request.CurrentPassword);
+
+    if (verification == PasswordVerificationResult.Failed)
+    {
+        return Unauthorized(new
+        {
+            message = "Current password is incorrect."
+        });
+    }
+
+    user.PasswordHash = _passwordHasher.HashPassword(
+        user,
+        request.NewPassword);
+
+    _context.SaveChanges();
+
+    return Ok(new
+    {
+        message = "Password changed successfully."
+    });
+}
+
         public AuthController(
             IConfiguration configuration,
             AppDbContext context,
