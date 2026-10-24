@@ -85,7 +85,7 @@ namespace MadrasaSiddeeqiyahAPI.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Campuses");
+                    b.ToTable("Campuses", (string)null);
                 });
 
             modelBuilder.Entity("MadrasaSiddeeqiyahAPI.Models.Donation", b =>
@@ -120,7 +120,7 @@ namespace MadrasaSiddeeqiyahAPI.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Donations");
+                    b.ToTable("Donations", (string)null);
                 });
 
             modelBuilder.Entity("MadrasaSiddeeqiyahAPI.Models.Expense", b =>
@@ -163,7 +163,7 @@ namespace MadrasaSiddeeqiyahAPI.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Expenses");
+                    b.ToTable("Expenses", (string)null);
                 });
 
             modelBuilder.Entity("MadrasaSiddeeqiyahAPI.Models.Student", b =>
@@ -212,7 +212,7 @@ namespace MadrasaSiddeeqiyahAPI.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Students");
+                    b.ToTable("Students", (string)null);
                 });
 
             modelBuilder.Entity("MadrasaSiddeeqiyahAPI.Models.User", b =>
@@ -243,7 +243,7 @@ namespace MadrasaSiddeeqiyahAPI.Migrations
                     b.HasIndex("Username")
                         .IsUnique();
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 #pragma warning restore 612, 618
         }
